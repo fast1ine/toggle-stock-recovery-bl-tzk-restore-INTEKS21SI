@@ -1,0 +1,122 @@
+#!/sbin/sh
+# TWRP shell-based update-binary
+# BID-AI100: Disable BL/TZK recovery restore
+# Target: /vendor/bin/install-vendor-recovery.sh
+# Method: rename to .bak. Subimg files and install_recovery binary are NOT touched.
+
+OUTFD="$2"
+ZIPFILE="$3"
+
+ui_print() {
+  echo "ui_print $1" > /proc/self/fd/$OUTFD
+  echo "ui_print" > /proc/self/fd/$OUTFD
+}
+
+abort_zip() {
+  ui_print "ERROR: $1"
+  exit 1
+}
+
+optional_restorecon() {
+  F="$1"
+  restorecon "$F" >/dev/null 2>&1 || true
+}
+
+safe_chmod_chown() {
+  F="$1"
+  MODE="$2"
+  chmod "$MODE" "$F" 2>/dev/null || ui_print "warn: chmod failed $F"
+  chown 0:0 "$F" 2>/dev/null || chown root:root "$F" 2>/dev/null || ui_print "warn: chown failed $F"
+  optional_restorecon "$F"
+}
+
+mount_rw() {
+  MP="$1"
+  mount "$MP" >/dev/null 2>&1
+  mount -o rw,remount "$MP" >/dev/null 2>&1
+  if ! mount | grep -q " $MP "; then
+    abort_zip "$MP not mounted"
+  fi
+  if ! mount | grep " $MP " | grep -q "rw"; then
+    abort_zip "$MP not mounted rw"
+  fi
+  ui_print "$MP mounted rw"
+}
+
+safe_disable() {
+  F="$1"
+  if [ -f "$F.bak" ] && [ ! -f "$F" ]; then
+    ui_print "skip: $F already disabled"
+    return 0
+  fi
+  if [ -f "$F" ] && [ -f "$F.bak" ]; then
+    abort_zip "conflict: $F and $F.bak both exist"
+  fi
+  if [ -f "$F" ]; then
+    mv "$F" "$F.bak" || abort_zip "mv failed: $F"
+    ui_print "disabled: $F -> $F.bak"
+    sync
+    return 0
+  fi
+  ui_print "warn: $F not found, no .bak either"
+  return 0
+}
+
+safe_enable() {
+  F="$1"
+  MODE="$2"
+  if [ -f "$F" ] && [ ! -f "$F.bak" ]; then
+    ui_print "skip: $F already enabled"
+    safe_chmod_chown "$F" "$MODE"
+    sync
+    return 0
+  fi
+  if [ -f "$F" ] && [ -f "$F.bak" ]; then
+    abort_zip "conflict: $F and $F.bak both exist"
+  fi
+  if [ -f "$F.bak" ]; then
+    mv "$F.bak" "$F" || abort_zip "mv failed: $F.bak"
+    ui_print "enabled: $F.bak -> $F"
+    safe_chmod_chown "$F" "$MODE"
+    sync
+    return 0
+  fi
+  ui_print "warn: $F not found, no .bak either"
+  return 0
+}
+
+ui_print " "
+ui_print "============================================"
+ui_print "BID-AI100: Disable BL/TZK recovery restore"
+ui_print "============================================"
+ui_print " "
+
+mount_rw /vendor
+
+ui_print "Target: /vendor/bin/install-vendor-recovery.sh"
+safe_disable /vendor/bin/install-vendor-recovery.sh
+
+ui_print " "
+ui_print "Preserved files (NOT modified):"
+if [ -f /vendor/bin/install_recovery ]; then
+  ui_print "  present: /vendor/bin/install_recovery"
+else
+  ui_print "  absent : /vendor/bin/install_recovery"
+fi
+if [ -f /vendor/etc/boot/tzk_recovery.subimg ]; then
+  ui_print "  present: /vendor/etc/boot/tzk_recovery.subimg"
+else
+  ui_print "  absent : /vendor/etc/boot/tzk_recovery.subimg"
+fi
+if [ -f /vendor/etc/boot/bl_recovery.subimg ]; then
+  ui_print "  present: /vendor/etc/boot/bl_recovery.subimg"
+else
+  ui_print "  absent : /vendor/etc/boot/bl_recovery.subimg"
+fi
+
+sync
+umount /vendor >/dev/null 2>&1 || ui_print "warn: umount /vendor failed (ignored)"
+
+ui_print " "
+ui_print "Done. vendor.flash_recovery2 wrapper disabled."
+exit 0
